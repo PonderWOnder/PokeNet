@@ -20,23 +20,127 @@ if int(tf.__version__[0])<2:
     tf.compat.v1.enable_eager_execution(config=None, device_policy=None, execution_mode=None)
     print('eager execution is activated. Tensorflow version is: ' +str(tf.__version__[0]))
 
+wd=os.getcwd()
+
 class UNET(): #Main class. All methodes deemed usefull to achief more robust image segmentation
 
    
-    def __init__(self,data,mask,labels,conv_min_depth=32,conv_max_depth=512):# Constructor. Generates dimensions of the network depending on varaibles 
+    def __init__(self,conv_min_depth=32,conv_max_depth=512,data=None,mask=None,labels=[]):# Constructor. Generates dimensions of the network depending on varaibles 
         self.data=data
         self.mask=mask
         self.label=labels
         self.conv_depth=conv_max_depth
         self.step_size=[conv_min_depth,conv_max_depth]
         self.transfer=[]
+ 
         
+    def patterns(self,c_size=5120,boundry=256,images=1000,draw=True):#pattern generator, Produces random patterns of variable size comprized of triangles squares circles and stars.
+        from numpy.random import randint as random
+        from skimage.draw import line
+        xy=[0,np.pi/6,np.pi/4,np.pi/3,np.pi/2,2*np.pi/3,3*np.pi/4,5*np.pi/6,np.pi,7*np.pi/6,5*np.pi/4,4*np.pi/3,3*np.pi/2,5*np.pi/3,7*np.pi/4,11*np.pi/6]
+        up=np.sin(xy)*20
+        up=np.where(up-np.floor(up)>.5,np.ceil(up),np.floor(up))
+        side=np.cos(xy)*20
+        side=np.where(side-np.floor(side)>.5,np.ceil(side),np.floor(side))
+        classes=4
+        canvas=np.zeros(shape=(c_size,c_size,classes),dtype=np.float32)
+        star_canvas=np.zeros(shape=(c_size,c_size),dtype=np.float32)
+        square_canvas=np.zeros(shape=(c_size,c_size),dtype=np.float32)
+        circle_canvas=np.zeros(shape=(c_size,c_size),dtype=np.float32)
+        triangle_canvas=np.zeros(shape=(c_size,c_size),dtype=np.float32)
+        star=[1,7,14,4,10]
+        square=[i for i in range(0,len(up),4)]
+        triangle=[0,6,11]
+        circle=[i for i in range(len(up))]
+        forms=[triangle,star,square,circle]
+        canvases=[triangle_canvas,star_canvas,square_canvas,circle_canvas]
+        maybe='x'
+        for example in range(int((c_size**2/boundry**2)*1.35)):
+            sys.stdout.write('|'+' \r' if example%2==0 else '-'+' \r')
+            sys.stdout.flush()
+            tryoi=np.zeros((boundry,boundry))
+            size=random(1,7)
+            posx=int(boundry/2)#np.random.randint(size+np.max(up)+1,boundry-size-np.max(up)-1)
+            posy=int(boundry/2)#np.random.randint(size+np.max(side)+1,boundry-size-np.max(side)-1)
+            tilt=random(0,len(up))
+            types=random(0,classes)
+            points=np.array([],dtype=np.int32)
+            for i in forms[types]:
+                i=(i+tilt)%len(up)
+                x=int(size*up[i]+posx)%boundry
+                y=int(size*side[i]+posy)%boundry
+                tryoi[x,y]=1
+                pos=np.array([x,y])
+                points=np.append(points,pos)
+            points=points.reshape((len(forms[types]),2))
+            for pos in range(len(points)):
+                x,y=points[pos-1]
+                xx,yy=points[pos]
+                rr,cc=line(x,y,xx,yy)
+                tryoi[rr,cc]=1
+
+            for i in range(boundry):
+                for ii in range(boundry-1):
+                    select=0
+                    if tryoi[i,ii]==1 and tryoi[i,ii+1]==0:
+                        for u in range(boundry-i):
+                            if tryoi[i+u,ii+1]==1:
+                                select+=1
+                                break
+                        for u in range(i):
+                            if tryoi[i-u,ii+1]==1:
+                                select+=1
+                                break
+                        for u in range(boundry-ii-1):
+                            if tryoi[i,ii+u+1]==1:
+                                select+=1
+                                break 
+                        if select==3:
+                            tryoi[i,ii+1]=1
+            may=0
+            while True:
+                pos_c=random(c_size-boundry)
+                pos_v=random(c_size-boundry)
+                color=random(4)
+                test=np.zeros(shape=(boundry,boundry,4))
+                test+=canvas[pos_c:pos_c+boundry,pos_v:pos_v+boundry]
+                test[:,:,color]+=tryoi
+                if np.mean(canvas[pos_c:pos_c+boundry,pos_v:pos_v+boundry])<=may and np.max(np.sum(test,axis=-1))<=1:
+                    canvas[pos_c:pos_c+boundry,pos_v:pos_v+boundry,color]+=tryoi
+                    canvases[types][pos_c:pos_c+boundry,pos_v:pos_v+boundry]+=tryoi
+                    break
+                may+=1/boundry**2
+                if may>12/boundry:
+                    maybe='o' if maybe=='x' else 'x'
+                    sys.stdout.write(maybe+' \r')
+                    sys.stdout.flush()
+                    break
+                    
+        for x in [0,2]:
+            canvas[:,:,x]+=canvas[:,:,3]
+        canvas=np.clip(canvas[:,:,:3],0,1)
+        canvases.append(np.where(np.sum(canvas,axis=2)==0,1,0))
+        canvases=np.stack(canvases,axis=0).transpose(1,2,0)
+        data=np.memmap(wd+'\\data.npy',dtype=np.float32,mode='w+',shape=(images,boundry,boundry,3))
+        mask=np.memmap(wd+'\\mask.npy',dtype=np.float32,mode='w+',shape=(images,boundry,boundry,len(forms)+1))
+        for image in range(images):
+            pos_c=random(c_size-boundry)
+            pos_v=random(c_size-boundry)
+            data[image]=canvas[pos_c:pos_c+boundry,pos_v:pos_v+boundry]
+            mask[image]=canvases[pos_c:pos_c+boundry,pos_v:pos_v+boundry]
+        label=[np.array(['Number_'+str(x+1) for x in range(len(data))]),np.array(['triangle','star','square','circle','background'])]
+        if draw==True:
+            import matplotlib.pyplot as plt
+            plt.imshow(canvas,vmin=0,vmax=1)
+            self.save_img(plt,'patterns')
+        return data,mask,label
+   
     
     def fix_data(self,split=[6,1,2]):# If data wasn't not specified in constructor file name will be used to process data. Data is normalized masks are fixed to value 1 and data is split to specifications.
         np.random.seed(42)
         if type(self.data)==str:
             from PIL import Image
-            
+            print('xx')
             data=[]
             for path in [self.data,self.mask]:
                 files=os.listdir(path)
@@ -46,12 +150,15 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             print(np.min(self.mask),np.max(self.mask),np.mean(self.mask))
             self.data=np.stack([(self.data[i]-np.min(self.data[i]))/(np.max(self.data[i])-np.min(self.data[i])) if np.max(self.data[i])!=0 else self.data[i] for i in range(len(self.data))],axis=0)
             print(np.min(self.data),np.max(self.data),np.mean(self.data))
+        elif self.data is None:
+            self.data,self.mask,self.label=self.patterns()#uses pattern generator if no data were supplied!!!
         self.image_size=self.data.shape
         if len(self.data)!=len(self.label[0]):
             self.label=[]
             self.label.append(np.array([str(i) for i in range(len(self.data))]))
-            self.label.append(np.array([str(i) for i in range(self.mask.shape[-1])]))
-        length=np.array(range(len(self.data)))
+            self.label.append(np.array([str(i) for i in range(self.depth)]))
+        print(type(self.data))
+        length=np.arange(len(self.data))
         np.random.shuffle(length)
         indices=[]
         x=0
@@ -63,21 +170,20 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         if u!=0:
             indices[-1]=np.append(indices[-1],length[u:])
         self.train_data,self.valid_data,self.test_data=[self.data[i] for i in indices]
-        self.data_label,self.valid_label,self.test_label=[self.label[0][i] for i in indices]
         self.train_mask,self.valid_mask,self.test_mask=[self.mask[i] for i in indices]
+        self.data_label,self.valid_label,self.test_label=[self.label[0][i] for i in indices]
+        self.depth=self.mask.shape[-1]
         return self
     
     
     def down_stream(self): # Generates procedual downsampling step of NN. targed size and input shape are taken form constructor's values.
-        image=np.zeros(self.image_size)
+        #image=np.zeros(self.image_size,dtype=np.float32)
         self.steps=range(int(np.log2(self.step_size[1])-np.log2(self.step_size[0])))
         self.input=into=Input(self.image_size[1:])
-        #print(self.image_size)
         for x in self.steps:
             down=Conv2D(2**int(np.log2(self.step_size[0])+x),(3,3),activation='relu',padding='same')(into)
             #down=Dropout(0.2)(down)
             down=Conv2D(2**int(np.log2(self.step_size[0])+x),(3,3),activation='relu',padding='same')(down)
-            #print(2**int(np.log2(self.step_size[0])+x),down._keras_shape)
             self.transfer.append(down)
             into=MaxPooling2D((2,2))(down)
         return into
@@ -92,13 +198,11 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             up = Conv2D(2**int(np.log2(self.step_size[0])+x), (3,3), activation = 'relu', padding = 'same')(merge)
             up=Dropout(0.2)(up)
             into = Conv2D(2**int(np.log2(self.step_size[0])+x), (3,3), activation = 'relu', padding = 'same')(up)
-            #print(2**int(np.log2(self.step_size[0])+x),into._keras_shape)
         up=Conv2DTranspose(int(self.step_size[0]),(1,1),strides=(2,2))(into)
         up=Conv2D(int(self.step_size[0]),(3,3),activation='relu',padding='same')(up)#(UpSampling2D(size = (2,2))(into))
         merge = concatenate([self.transfer[0],up])
         up=Conv2D(int(self.step_size[0]),(3,3),activation='relu',padding='same')(merge)
-        #print(self.step_size[0],up._keras_shape)
-        self.output=output=Conv2D( self.mask.shape[-1] ,(1,1),activation='softmax',padding='same')(up)
+        self.output=output=Conv2D(self.depth,(1,1),activation='softmax',padding='same')(up)
         model=Model(self.input,self.output)
         return model    
             
@@ -120,13 +224,13 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         self.load_weights(path)
         return self
     
-    def scheduler(self,epoch,lr,x=-.1):
+    def scheduler(self,epoch,lr,x=-.1):#adaptiv learning rate. reduces step size every ten epochs by e to the power of negativ x 
         if epoch%10!=0:
             return lr
         else:
             return lr * np.exp(x)
     
-    def train(self,epochs=16,batch_size=16,safe=True,path='C:\\Users\\Grka\\Desktop\\_Robustness_AI\\Masks\\backup\\',data=None,mask=None): #training routine. Either saveing model or not. default data is class training data.        
+    def train(self,epochs=16,batch_size=16,safe=True,path=wd+'\\backup\\',data=None,mask=None,draw=False): #training routine. Either saveing model or not. default data is class training data.        
         if data is None:
             data=self.train_data
             mask=self.train_mask
@@ -162,12 +266,25 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                       validation_steps=len(self.valid_data)/batch_size,
                       epochs=epochs,
                       callbacks=[lr_update,self.history])
+        if draw==True:
+            import matplotlib.pyplot as plt
+            acc=[u for u in self.history.history if 'acc' in u]
+            for a in acc:
+                plt.plot(np.arange(1,epochs+1,1),self.history.history[a])
+            plt.title('Graph')
+            plt.ylabel('Accuracy')
+            plt.xlabel('epoch')
+            plt.legend(acc, loc='upper left')
+            self.save_img(plt,'graph')
+            plt.show()
             
             
     def predict(self,images=None, mask=None, size=3, draw=True): # predict method is standard keras predict with option of drawing random samples.
         if images is None:
             images=self.test_data
             mask=self.test_mask
+        if mask is None:
+            mask=[s_mask for s_mask in [self.train_mask,self.valid_mask,self.test_mask] if len(s_mask)==len(images)][0]
         predictions=[]
         if size>len(images):
             size=len(images)
@@ -179,7 +296,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             indizes=np.unique(np.random.randint(len(predictions),size=size))
             fig=plt.figure(figsize=(28,10*len(indizes)))
             pos_x=1
-            line=mask.shape[-1]
+            line=self.depth
             for i in indizes:
                 for k in range(2):
                     if (k+1)%2==0:
@@ -197,7 +314,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                     img_truth=[img_truth[i]]
                     img_truth.extend(img)
                     img=img_truth
-                    for ii,pos in zip(img,range(7)):
+                    for ii,pos in zip(img,range(len(img))):
                         sub=fig.add_subplot(2*np.ceil(len(indizes))+1, line+1, pos_x)
                         pos_x+=1
                         sub.axis('off')
@@ -205,6 +322,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                         sub.imshow(ii,vmin=0,vmax=1)
             self.save_img(fig,figname='predict')
             plt.show()
+            
         loss, acc = self.model.evaluate(images,  mask, verbose=2)
         return np.concatenate(predictions,axis=0)
     
@@ -217,19 +335,20 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             np.expand_dims(data, axis=0)
         if len(mask.shape)==3:
             np.expand_dims(mask, axis=0)
-        for xy in range(mask.shape[-1]):
+        for xy in range(self.depth):
             class_mask=np.zeros(mask.shape[1:])
             class_mask[:,:,xy]+=np.max(mask)
             targed_class_mask.append(class_mask)
         results=np.zeros(shape=data.shape,dtype=np.float32)
         hh=0
+        width=self.depth
         for x,y in zip(data,mask):
             result=[]
             patterns=[]
-            zeros=[np.zeros(data[:1].shape)]*6
+            zeros=[np.zeros(data[:1].shape)]*width
             patterns.append(zeros)
             if against_mask==True:
-                for targed,u in zip(targed_class_mask,range(6)):
+                for targed,u in zip(targed_class_mask,range(width)):
                     targed[:,:,u]=y[:,:,u]
             for i in [-1,1]:
                 pattern=[np.array(self.create_adversarial_pattern(np.expand_dims(x,axis=0),yy)*i*epsilon) for yy in targed_class_mask]# adverserial pertubation generator
@@ -299,18 +418,17 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             data=self.test_data
             mask=self.test_mask
         mask_shape=mask.shape
+        width=mask_shape[-1]
         if class_to!=None:
             try:
                 class_to=class_to-1
             except:
-                class_to=int(input('Please enter a Number between 1 and '+str(mask_shape[-1])))
+                class_to=int(input('Please enter a Number between 1 and '+str(width)))
                 class_to=class_to-1
             targed_class_mask=np.zeros(mask_shape)
             targed_class_mask[:,:,:,class_to]+=np.max(mask)
         else:
             targed_class_mask=mask
-        #methode[int(iterativ)]
-        #data_gen=ImageDataGenerator()
         data_adv=methode[int(iterativ)](data,targed_class_mask,add,epsilon)
         if draw==True:
             import matplotlib.pyplot as plt
@@ -341,8 +459,8 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                     sub.set_title(title)
                     sub.imshow(src,vmin=0,vmax=1)
                     pos_x+=1
-                    proz=[str(round(np.mean(1-(np.abs(img_src[:,:,u]-mask[i,:,:,u]))/np.max(mask)),4)*100)+' %' for u in range(6)]
-                    for ii in range(6):
+                    proz=[str(round(np.mean(1-(np.abs(img_src[:,:,u]-mask[i,:,:,u]))/np.max(mask)),4)*100)+' %' for u in range(width)]
+                    for ii in range(width):
                         sub=fig.add_subplot(graph_y*3, graph_x , pos_x)
                         sub.axis('off')
                         sub.set_title(str(proz[ii]))
@@ -397,18 +515,22 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                     print('Failure!')
       
     
-    def load_data(self,a,b,c,d,e,f,g,h,i): #to except data from another class
+    def load_data(self,data): #to except data from another class
         try:
-            self.train_data,self.valid_data,self.test_data,self.train_mask,self.valid_mask,self.test_mask,self.data_label,self.valid_label,self.test_label=a,b,c,d,e,f,g,h,i
+            self.train_data,self.valid_data,self.test_data,self.train_mask,self.valid_mask,self.test_mask,self.data_label,self.valid_label,self.test_label,self.label=data
+            self.image_size=self.train_data.shape
+            self.depth=self.train_mask.shape[-1]
+            print('loaded')
         except:
             print('Something went wrong')
+        return self
     
     
     def return_data(self): #returns all data set relaited arrays
         try:
-            return self.train_data,self.valid_data,self.test_data,self.train_mask,self.valid_mask,self.test_mask,self.data_label,self.valid_label,self.test_label
+            return [self.train_data,self.valid_data,self.test_data,self.train_mask,self.valid_mask,self.test_mask,self.data_label,self.valid_label,self.test_label,self.label]
         except:
-            (print("Data is not yet generated"))
+            print("Data is not yet generated")
     
     
     def return_model(self): #exports model from class
@@ -422,6 +544,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         import matplotlib.pyplot as plt
         if size>len(data):
             size=len(data)
+        width=self.depth
         indizes=np.random.randint(len(in_pred),size=size)
         fig=plt.figure(figsize=(28,10*len(indizes)))
         pos_x=1
@@ -429,18 +552,18 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
             for k in range(2): 
                 if (k+1)%2==1:
                     img=[data[index]]
-                    target=[mask[index,:,:,i] for i in range(6)]
+                    target=[mask[index,:,:,i] for i in range(width)]
                     img.extend(target)
                     label=['Target']
-                    label.extend(['100%']*6)
+                    label.extend(['100%']*width)
                 else:
                     img=[to_pred[index]]
-                    pred=[in_pred[index,:,:,i] for i in range(6)]
+                    pred=[in_pred[index,:,:,i] for i in range(width)]
                     img.extend(pred)
                     label=['Rel.Diff.'+str(np.mean(np.abs(data[index]-to_pred[index])))]
-                    label.extend([str(np.round(1-np.mean(np.abs(target[i]-pred[i])),4)*100)+'%' for i in range(6)])
-                for ii,pos in zip(img,range(7)):
-                    sub=fig.add_subplot(2*len(indizes)+1, 7, pos_x)
+                    label.extend([str(np.round(1-np.mean(np.abs(target[i]-pred[i])),4)*100)+'%' for i in range(width)])
+                for ii,pos in zip(img,range(width+1)):
+                    sub=fig.add_subplot(2*len(indizes)+1, width+1, pos_x)
                     pos_x+=1
                     sub.axis('off')
                     sub.set_title(label[pos])
@@ -450,7 +573,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         return self
     
     
-    def save_img(self,fig,figname='random',path_pic='C:\\Users\\Grka\\Desktop\\_Robustness_AI\\images\\'):#logic for saveing samples drawn with matplot lib
+    def save_img(self,fig,figname='random',path_pic=wd+'\\images\\'):#logic for saveing samples drawn with matplot lib
         if figname!='no':
             img_name=figname+'1.png'
             try:
