@@ -55,7 +55,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         forms=[triangle,star,square,circle]
         canvases=[triangle_canvas,star_canvas,square_canvas,circle_canvas]
         maybe='x'
-        for example in range(int((c_size**2/boundry**2)*1.35)):
+        for example in range(int((c_size**2/boundry**2)*1.5)):
             sys.stdout.write('|'+' \r' if example%2==0 else '-'+' \r')
             sys.stdout.flush()
             tryoi=np.zeros((boundry,boundry))
@@ -131,6 +131,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
         label=[np.array(['Number_'+str(x+1) for x in range(len(data))]),np.array(['triangle','star','square','circle','background'])]
         if draw==True:
             import matplotlib.pyplot as plt
+            plt.axis('off')
             plt.imshow(canvas,vmin=0,vmax=1)
             self.save_img(plt,'patterns')
         return data,mask,label
@@ -504,7 +505,7 @@ class UNET(): #Main class. All methodes deemed usefull to achief more robust ima
                     print('Model loaded!')
                     loss, acc = self.model.evaluate(self.test_data,  self.test_mask, verbose=2)
                 except:
-                    print('Failure!')
+                    print('Failure! No pretrained weights were loaded')
         else:
                 path=os.path.normpath(path)
                 try:
